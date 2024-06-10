@@ -2,7 +2,7 @@ from rest_framework import generics
 from django.contrib.auth.models import User
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework import status
+from rest_framework import status, serializers
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from rest_framework.authtoken.views import ObtainAuthToken
@@ -12,6 +12,23 @@ from django.utils import timezone
 from datetime import timedelta
 from .models import TodoList, Todo
 from .serializers import TodoListSerializer, TodoSerializer
+
+class DefaultView(APIView):
+    def get(self, request):
+        return Response({"message": "Todo API"})
+
+class IsLoggedInView(APIView):
+    def get(self, request):
+        if request.user.is_authenticated:
+            return Response(
+                {"message": "OK", "user_id": request.user.id},
+                status=status.HTTP_200_OK
+            )
+        else:
+            return Response(
+                {"message": "OKerror"},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
 class RegisterView(generics.CreateAPIView):
     permission_classes = [AllowAny]
@@ -54,19 +71,53 @@ class TodoListCreateView(generics.ListCreateAPIView):
         return TodoList.objects.filter(user=self.request.user)
 
     def perform_create(self, serializer):
-        print(f"Creating TodoList for user: {self.request.user}")
-        serializer.save(user=self.request.user)
+        user = self.request.user
+        now = timezone.now()
+        current_month = now.month
+        current_year = now.year
 
+        # Verificar si ya existe una lista de tareas para el usuario en el mes actual
+        if TodoList.objects.filter(user=user, created_at__year=current_year, created_at__month=current_month).exists():
+            raise serializers.ValidationError("Ya existe una lista de tareas para este mes.")
+        
+        # Si no existe, se crea una nueva lista de tareas
+        serializer.save(user=user)
+class TodoListMonthlyView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        user = request.user
+        now = timezone.now()
+        current_month = now.month
+        current_year = now.year
+
+        # Filtrar las listas de tareas por usuario, año y mes actuales
+        todo_lists = TodoList.objects.filter(user=user, created_at__year=current_year, created_at__month=current_month)
+        serializer = TodoListSerializer(todo_lists, many=True)
+        return Response(serializer.data)
 class TodoCreateView(generics.ListCreateAPIView):
     serializer_class = TodoSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Todo.objects.filter(todo_list__user=self.request.user, todo_list_id=self.kwargs['list_id'])
+        return Todo.objects.filter(todo_list__user=self.request.user)
 
     def perform_create(self, serializer):
-        todo_list = TodoList.objects.get(id=self.kwargs['list_id'], user=self.request.user)
+        user = self.request.user
+        now = timezone.now()
+        current_month = now.month
+        current_year = now.year
+
+        # Intentar obtener el TodoList del mes actual para el usuario
+        todo_list, created = TodoList.objects.get_or_create(
+            user=user,
+            created_at
+            defaults={'user': user}
+        )
+
+        # Guardar el nuevo Todo con el todo_list asociado
         serializer.save(todo_list=todo_list)
+
 
 class TodoUpdateView(generics.RetrieveUpdateAPIView):
     serializer_class = TodoSerializer
